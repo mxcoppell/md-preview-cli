@@ -1,7 +1,7 @@
 version: 2
 
 builds:
-  - main: .
+  - main: ./cmd/md-preview-cli
     binary: md-preview-cli
     ldflags:
       - -s -w -X github.com/mxcoppell/md-preview-cli/internal/version.Version={{.Version}}

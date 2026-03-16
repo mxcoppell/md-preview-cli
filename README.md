@@ -20,6 +20,14 @@ A CLI tool that renders markdown files in a native frameless macOS window. Desig
 
 ## Install
 
+### Homebrew (macOS)
+
+```bash
+brew install mxcoppell/tap/md-preview-cli
+```
+
+### Build from source
+
 Requires Go 1.24+ and macOS (CGO + Cocoa).
 
 ```bash
