@@ -1,6 +1,6 @@
 # Go binary
 bin/
-md-preview-cli
+/md-preview-cli
 
 # Build / release
 dist/

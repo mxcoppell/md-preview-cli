@@ -7,7 +7,7 @@ LDFLAGS   := -X github.com/mxcoppell/md-preview-cli/internal/version.Version=$(V
 
 ## Development build — includes debug symbols, version set to "dev"
 build:
-	go build -o $(BUILD_DIR)/$(BINARY) .
+	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/md-preview-cli
 
 ## Release build — stripped symbols, version injected from git
 release:
