@@ -16,7 +16,6 @@ extern const char* goGetWindowTitle(int index);
 extern void goDockMenuActivate(const char* windowID);
 extern void goDockMenuClose(const char* windowID);
 extern void goDockMenuOpenFile(const char* path);
-extern void goDockMenuQuit(void);
 
 // HostDelegate replaces AccessoryDelegate for multi-window mode.
 @interface HostDelegate : NSObject <NSApplicationDelegate>

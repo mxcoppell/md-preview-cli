@@ -6,14 +6,17 @@ A CLI tool that renders markdown files in a native frameless window. Designed fo
 
 - **Language**: Go with CGO (webview + Cocoa frameless)
 - **Two-process model**: CLI spawns GUI subprocess via `--internal-gui=<config.json>`, exits immediately
+- **Multi-window host**: First invocation spawns a persistent host process (`--internal-host`). Subsequent invocations join via IPC socket, opening new windows in the same process. The host manages all windows, the dock icon, and the NSApp event loop.
 - **Rendering**: Server-side Goldmark (CommonMark + GFM) + Chroma syntax highlighting
 - **Client-side**: KaTeX (math) and Mermaid.js (diagrams) lazy-loaded only when present
 - **Single binary**: All HTML/CSS/JS/fonts embedded via `go:embed`
+- **Window close**: Native `[NSWindow close]` instead of `webview.Destroy()`. The webview destructor's `deplete_run_loop_event_queue()` deadlocks when called from a GCD main queue block (which is always the case since `CloseWindow` runs via `Dispatch`). Closed webview C objects are intentionally leaked — acceptable because the process exits when the last window closes.
 
 ## Key Directories
 
 - `cmd/` — CLI flag parsing, stdin detection, GUI spawning
-- `internal/gui/` — GUI process lifecycle, webview, frameless macOS window (CGO)
+- `internal/gui/` — GUI process lifecycle, webview, frameless macOS window (CGO). Two entry points: `Run()` for single-window accessory mode, `RunHost()` for multi-window daemon with dock icon
+- `internal/ipc/` — Unix socket IPC server for CLI-to-host communication
 - `internal/server/` — HTTP server, WebSocket hub, auto-shutdown
 - `internal/renderer/` — Goldmark markdown→HTML pipeline, TOC extraction, math/mermaid placeholders
 - `internal/watcher/` — fsnotify + stat-based polling file watchers

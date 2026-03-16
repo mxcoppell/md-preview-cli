@@ -69,15 +69,5 @@ func goDockMenuOpenFile(path *C.char) {
 	go activeHost.OpenFile(p)
 }
 
-//export goDockMenuQuit
-func goDockMenuQuit() {
-	if activeHost == nil {
-		return
-	}
-	activeHost.primaryWV.Dispatch(func() {
-		activeHost.closeAllWindows()
-	})
-}
-
 // Ensure unsafe is used (required for //export files).
 var _ = unsafe.Pointer(nil)
