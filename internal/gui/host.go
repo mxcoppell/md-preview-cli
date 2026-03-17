@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	webview "github.com/webview/webview_go"
 
@@ -30,6 +31,7 @@ type Host struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	verbose   bool
+	ready     chan struct{} // closed after first window is created
 }
 
 // WindowEntry tracks a single preview window and its resources.
@@ -46,6 +48,14 @@ type WindowEntry struct {
 // sets up the dock icon, starts IPC, creates the first window, and runs
 // the NSApp event loop.
 func RunHost(cfgPath string) error {
+	// Clean up stale config temp files older than 5 minutes
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "md-preview-cli-gui-*.json"))
+	for _, m := range matches {
+		if info, err := os.Stat(m); err == nil && time.Since(info.ModTime()) > 5*time.Minute {
+			os.Remove(m)
+		}
+	}
+
 	cfg, err := ReadConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
@@ -59,6 +69,7 @@ func RunHost(cfgPath string) error {
 		ctx:     ctx,
 		cancel:  cancel,
 		verbose: cfg.Verbose,
+		ready:   make(chan struct{}),
 	}
 	activeHost = h
 
@@ -78,6 +89,7 @@ func RunHost(cfgPath string) error {
 		ipcSrv.Close()
 		return fmt.Errorf("creating first window: %w", err)
 	}
+	close(h.ready)
 
 	// Signal handler
 	sigCh := make(chan os.Signal, 1)
@@ -101,11 +113,41 @@ func RunHost(cfgPath string) error {
 	return nil
 }
 
+// findWindowByFilePath returns the window entry for the given file path, or nil.
+// Caller must hold h.mu or call under appropriate synchronization.
+func (h *Host) findWindowByFilePath(path string) *WindowEntry {
+	for _, e := range h.windows {
+		if e.FilePath == path {
+			return e
+		}
+	}
+	return nil
+}
+
 // handleIPC processes an incoming IPC request from a CLI process.
 func (h *Host) handleIPC(req ipc.OpenRequest) ipc.OpenResponse {
+	// Wait for the first window to finish creating (sets primaryWV).
+	<-h.ready
+
 	cfg, err := ReadConfig(req.ConfigPath)
 	if err != nil {
 		return ipc.OpenResponse{Error: fmt.Sprintf("read config: %v", err)}
+	}
+
+	// Dedup: if same file is already open, activate that window instead
+	if cfg.FilePath != "" && cfg.Filename != "stdin" {
+		h.mu.Lock()
+		existing := h.findWindowByFilePath(cfg.FilePath)
+		h.mu.Unlock()
+		if existing != nil {
+			done := make(chan struct{})
+			h.primaryWV.Dispatch(func() {
+				activateWindow(existing.Webview.Window())
+				close(done)
+			})
+			<-done
+			return ipc.OpenResponse{OK: true, WindowID: existing.ID, Reused: true}
+		}
 	}
 
 	// Window creation must happen on the main thread
@@ -150,18 +192,19 @@ func (h *Host) createWindow(cfg Config) (string, error) {
 
 	// Start HTTP server
 	srv := server.New(server.Config{
-		Port:       cfg.Port,
-		Theme:      cfg.Theme,
-		HTML:       cfg.HTML,
-		TOC:        toServerTOC(cfg.TOC),
-		Filename:   cfg.Filename,
-		FilePath:   cfg.FilePath,
-		ShowTOC:    cfg.ShowTOC,
-		HasMath:    cfg.HasMath,
-		HasMermaid: cfg.HasMermaid,
-		WordCount:  cfg.WordCount,
-		NoWatch:    cfg.NoWatch,
-		Verbose:    h.verbose,
+		Port:                cfg.Port,
+		Theme:               cfg.Theme,
+		HTML:                cfg.HTML,
+		TOC:                 toServerTOC(cfg.TOC),
+		Filename:            cfg.Filename,
+		FilePath:            cfg.FilePath,
+		ShowTOC:             cfg.ShowTOC,
+		HasMath:             cfg.HasMath,
+		HasMermaid:          cfg.HasMermaid,
+		WordCount:           cfg.WordCount,
+		NoWatch:             cfg.NoWatch,
+		Verbose:             h.verbose,
+		DisableAutoShutdown: true,
 	})
 
 	addr, err := srv.Start(wCtx)
@@ -343,14 +386,30 @@ func (h *Host) WindowList() []WindowEntry {
 }
 
 // OpenFile reads a markdown file, renders it, and opens a new window.
+// If the file is already open, the existing window is activated instead.
 func (h *Host) OpenFile(path string) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "md-preview-cli: resolve path: %v\n", err)
 		return
 	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		resolved = absPath
+	}
 
-	data, err := os.ReadFile(absPath)
+	// Dedup: activate existing window if file already open
+	h.mu.Lock()
+	existing := h.findWindowByFilePath(resolved)
+	h.mu.Unlock()
+	if existing != nil {
+		h.primaryWV.Dispatch(func() {
+			activateWindow(existing.Webview.Window())
+		})
+		return
+	}
+
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "md-preview-cli: read file: %v\n", err)
 		return
@@ -362,9 +421,9 @@ func (h *Host) OpenFile(path string) {
 		HTML:       result.HTML,
 		TOC:        rendererTOCToGUI(result.TOC),
 		RawContent: string(data),
-		Filename:   filepath.Base(absPath),
-		FilePath:   absPath,
-		WatchFiles: []string{absPath},
+		Filename:   filepath.Base(resolved),
+		FilePath:   resolved,
+		WatchFiles: []string{resolved},
 		HasMath:    result.HasMath,
 		HasMermaid: result.HasMermaid,
 		WordCount:  result.WordCount,

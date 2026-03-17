@@ -72,7 +72,7 @@ func (h *WSHub) removeConn(conn *websocket.Conn) {
 
 	conn.Close(websocket.StatusNormalClosure, "")
 
-	if remaining == 0 {
+	if remaining == 0 && !h.server.cfg.DisableAutoShutdown {
 		h.timerMu.Lock()
 		h.timer = time.AfterFunc(30*time.Second, func() {
 			h.mu.Lock()

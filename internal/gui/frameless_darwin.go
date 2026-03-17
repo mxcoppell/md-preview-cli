@@ -74,6 +74,12 @@ void guiShowWindow(void *window, int width, int height) {
     }
     _cascadePoint = [nsWindow cascadeTopLeftFromPoint:_cascadePoint];
 
+    // Reset cascade when it goes off-screen so windows don't disappear
+    NSRect screen = [[NSScreen mainScreen] visibleFrame];
+    if (_cascadePoint.x > NSMaxX(screen) - 200 || _cascadePoint.y < NSMinY(screen) + 200) {
+        _cascadePoint = NSMakePoint(0, 0);
+    }
+
     [nsWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [nsWindow setLevel:NSFloatingWindowLevel];

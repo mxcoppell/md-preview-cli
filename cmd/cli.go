@@ -116,6 +116,7 @@ func run(cfg Config) error {
 	for _, file := range cfg.Files {
 		var content string
 		var filename string
+		var resolved string
 
 		if cfg.IsStdin {
 			data, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdinSize))
@@ -131,6 +132,14 @@ func run(cfg Config) error {
 			}
 			content = string(data)
 			filename = filepath.Base(file)
+
+			// Normalize file path for dedup
+			absPath, _ := filepath.Abs(file)
+			r, err := filepath.EvalSymlinks(absPath)
+			if err != nil {
+				r = absPath
+			}
+			resolved = r
 		}
 
 		// Render markdown to HTML
@@ -139,11 +148,12 @@ func run(cfg Config) error {
 		// Build watch file list
 		var watchFiles []string
 		if !cfg.NoWatch && !cfg.IsStdin {
-			absPath, err := filepath.Abs(file)
-			if err != nil {
-				return fmt.Errorf("resolving path: %w", err)
-			}
-			watchFiles = []string{absPath}
+			watchFiles = []string{resolved}
+		}
+
+		filePath := resolved
+		if cfg.IsStdin {
+			filePath = ""
 		}
 
 		guiCfg := gui.Config{
@@ -153,7 +163,7 @@ func run(cfg Config) error {
 			TOC:        convertTOC(result.TOC),
 			RawContent: content,
 			Filename:   filename,
-			FilePath:   file,
+			FilePath:   filePath,
 			WatchFiles: watchFiles,
 			Poll:       cfg.Poll,
 			NoWatch:    cfg.NoWatch,
@@ -165,52 +175,84 @@ func run(cfg Config) error {
 			Verbose:    cfg.Verbose,
 		}
 
-		if err := spawnGUI(guiCfg, cfg.Wait); err != nil {
+		resp, err := spawnGUI(guiCfg, cfg.Wait)
+		if err != nil {
 			return err
+		}
+
+		// Print human-readable output for agents
+		displayName := filename
+		if resp.Reused {
+			fmt.Printf("Previewing %s (reused)\n", displayName)
+		} else {
+			fmt.Printf("Previewing %s\n", displayName)
 		}
 	}
 
 	return nil
 }
 
-func spawnGUI(cfg gui.Config, wait bool) error {
+func spawnGUI(cfg gui.Config, wait bool) (ipc.OpenResponse, error) {
 	// Browser mode: standalone server, no dock icon needed
 	if cfg.Browser {
-		return spawnBrowserMode(cfg, wait)
+		return ipc.OpenResponse{OK: true}, spawnBrowserMode(cfg, wait)
 	}
 
 	// Try IPC to existing host first
-	if trySendIPC(cfg) {
-		return nil
+	if resp, ok := trySendIPC(cfg); ok {
+		return resp, nil
 	}
 
-	// No host running — spawn one
-	return spawnHostProcess(cfg, wait)
+	// No host running — spawn one (host opens this file from its initial config)
+	err := spawnHostProcess(cfg, wait)
+	if err != nil {
+		// Lost race — another host won, retry IPC
+		if resp, ok := trySendIPC(cfg); ok {
+			return resp, nil
+		}
+		return ipc.OpenResponse{}, err
+	}
+
+	// Wait for host to become reachable so subsequent IPC calls
+	// (e.g. file2, file3 in a multi-file invocation) can connect.
+	waitForHost()
+
+	return ipc.OpenResponse{OK: true}, nil
+}
+
+// waitForHost polls until the IPC socket is accepting connections, up to ~2.5s.
+func waitForHost() {
+	for range 50 {
+		if ipc.IsHostRunning() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // trySendIPC attempts to connect to an existing host and send the config.
-func trySendIPC(cfg gui.Config) bool {
+func trySendIPC(cfg gui.Config) (ipc.OpenResponse, bool) {
 	conn, err := ipc.Dial()
 	if err != nil {
-		return false
+		return ipc.OpenResponse{}, false
 	}
 	defer conn.Close()
 
 	tmpPath, err := gui.WriteConfig(cfg)
 	if err != nil {
-		return false
+		return ipc.OpenResponse{}, false
 	}
 
 	resp, err := ipc.SendOpen(conn, tmpPath)
 	if err != nil {
 		os.Remove(tmpPath)
-		return false
+		return ipc.OpenResponse{}, false
 	}
 	if !resp.OK {
 		fmt.Fprintf(os.Stderr, "md-preview-cli: host error: %s\n", resp.Error)
-		return false
+		return ipc.OpenResponse{}, false
 	}
-	return true
+	return resp, true
 }
 
 // spawnHostProcess starts a new host process with the initial config.

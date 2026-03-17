@@ -3,10 +3,13 @@ package ipc
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // Handler is called when a new open request arrives from a CLI client.
@@ -21,14 +24,39 @@ type Server struct {
 }
 
 // NewServer creates a new IPC server that forwards requests to handler.
+// It uses a try-listen-first pattern to avoid racing with another host:
+//  1. Try net.Listen without removing the socket.
+//  2. If "address already in use", dial the socket to check liveness.
+//  3. If live → return ErrHostAlreadyRunning; if stale → remove and retry once.
 func NewServer(handler Handler) (*Server, error) {
 	path := SocketPath()
-	// Remove stale socket
-	os.Remove(path)
 
 	ln, err := net.Listen("unix", path)
-	if err != nil {
+	if err == nil {
+		return &Server{
+			listener: ln,
+			handler:  handler,
+			done:     make(chan struct{}),
+		}, nil
+	}
+
+	// Check if the error is "address already in use"
+	if !isAddrInUse(err) {
 		return nil, fmt.Errorf("listen unix %s: %w", path, err)
+	}
+
+	// Socket exists — probe whether a live host owns it
+	conn, dialErr := net.DialTimeout("unix", path, 500*time.Millisecond)
+	if dialErr == nil {
+		conn.Close()
+		return nil, ErrHostAlreadyRunning
+	}
+
+	// Stale socket — remove and retry once
+	os.Remove(path)
+	ln, err = net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listen unix %s (retry): %w", path, err)
 	}
 
 	return &Server{
@@ -36,6 +64,19 @@ func NewServer(handler Handler) (*Server, error) {
 		handler:  handler,
 		done:     make(chan struct{}),
 	}, nil
+}
+
+// isAddrInUse reports whether err is a "bind: address already in use" error.
+func isAddrInUse(err error) bool {
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	var sysErr *os.SyscallError
+	if !errors.As(opErr.Err, &sysErr) {
+		return false
+	}
+	return sysErr.Err == syscall.EADDRINUSE
 }
 
 // Serve accepts connections until Close is called.

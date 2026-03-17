@@ -2,8 +2,11 @@ package ipc
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,8 +15,9 @@ func TestSocketPath(t *testing.T) {
 	if path == "" {
 		t.Fatal("SocketPath returned empty string")
 	}
-	if filepath.Base(path) != "md-preview-cli.sock" {
-		t.Errorf("unexpected socket filename: %s", filepath.Base(path))
+	expected := fmt.Sprintf("md-preview-cli-%d.sock", os.Getuid())
+	if filepath.Base(path) != expected {
+		t.Errorf("unexpected socket filename: got %s, want %s", filepath.Base(path), expected)
 	}
 }
 
@@ -115,5 +119,82 @@ func TestServerInvalidJSON(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected error response for invalid JSON")
+	}
+}
+
+func TestNewServer_HostAlreadyRunning(t *testing.T) {
+	os.Remove(SocketPath())
+
+	srv1, err := NewServer(func(req OpenRequest) OpenResponse {
+		return OpenResponse{OK: true}
+	})
+	if err != nil {
+		t.Fatalf("first NewServer: %v", err)
+	}
+	defer srv1.Close()
+	go srv1.Serve()
+
+	_, err = NewServer(func(req OpenRequest) OpenResponse {
+		return OpenResponse{OK: true}
+	})
+	if !errors.Is(err, ErrHostAlreadyRunning) {
+		t.Errorf("expected ErrHostAlreadyRunning, got: %v", err)
+	}
+}
+
+func TestNewServer_StaleSocket(t *testing.T) {
+	path := SocketPath()
+	os.Remove(path)
+	os.WriteFile(path, []byte("stale"), 0600)
+
+	srv, err := NewServer(func(req OpenRequest) OpenResponse {
+		return OpenResponse{OK: true}
+	})
+	if err != nil {
+		t.Fatalf("NewServer with stale socket: %v", err)
+	}
+	defer srv.Close()
+	// Should have cleaned up stale socket and started successfully
+}
+
+func TestOpenResponse_Reused(t *testing.T) {
+	resp := OpenResponse{OK: true, WindowID: "w-1", Reused: true}
+	data, _ := json.Marshal(resp)
+	s := string(data)
+	if !strings.Contains(s, `"reused":true`) {
+		t.Errorf("expected reused field in JSON: %s", s)
+	}
+
+	resp2 := OpenResponse{OK: true, WindowID: "w-2"}
+	data2, _ := json.Marshal(resp2)
+	if strings.Contains(string(data2), "reused") {
+		t.Errorf("reused should be omitted when false: %s", string(data2))
+	}
+}
+
+func TestServerAndDial_Reused(t *testing.T) {
+	os.Remove(SocketPath())
+
+	srv, err := NewServer(func(req OpenRequest) OpenResponse {
+		return OpenResponse{OK: true, WindowID: "w-1", Reused: true}
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer srv.Close()
+	go srv.Serve()
+
+	conn, err := Dial()
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	resp, err := SendOpen(conn, "/tmp/test.json")
+	if err != nil {
+		t.Fatalf("SendOpen: %v", err)
+	}
+	if !resp.Reused {
+		t.Error("expected Reused=true")
 	}
 }

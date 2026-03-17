@@ -2,12 +2,17 @@ package ipc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// ErrHostAlreadyRunning is returned by NewServer when a live host is already
+// listening on the socket.
+var ErrHostAlreadyRunning = errors.New("host already running")
 
 // OpenRequest is sent from CLI to host to open a new window.
 type OpenRequest struct {
@@ -19,11 +24,13 @@ type OpenResponse struct {
 	OK       bool   `json:"ok"`
 	WindowID string `json:"window_id,omitempty"`
 	Error    string `json:"error,omitempty"`
+	Reused   bool   `json:"reused,omitempty"`
 }
 
 // SocketPath returns the Unix socket path for IPC.
+// The filename includes the UID to prevent collisions between users sharing /tmp.
 func SocketPath() string {
-	return filepath.Join(os.TempDir(), "md-preview-cli.sock")
+	return filepath.Join(os.TempDir(), fmt.Sprintf("md-preview-cli-%d.sock", os.Getuid()))
 }
 
 // Dial connects to the host process with a timeout.

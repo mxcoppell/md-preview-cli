@@ -24,18 +24,19 @@ type TOCEntry struct {
 
 // Config holds server configuration.
 type Config struct {
-	Port       int
-	Theme      string
-	HTML       string
-	TOC        []TOCEntry
-	Filename   string
-	FilePath   string
-	ShowTOC    bool
-	HasMath    bool
-	HasMermaid bool
-	WordCount  int
-	NoWatch    bool
-	Verbose    bool
+	Port                int
+	Theme               string
+	HTML                string
+	TOC                 []TOCEntry
+	Filename            string
+	FilePath            string
+	ShowTOC             bool
+	HasMath             bool
+	HasMermaid          bool
+	WordCount           int
+	NoWatch             bool
+	Verbose             bool
+	DisableAutoShutdown bool // In host mode, the host manages window lifecycle
 }
 
 // Server is the HTTP server for md-preview-cli.

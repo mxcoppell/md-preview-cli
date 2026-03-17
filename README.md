@@ -12,7 +12,7 @@ A CLI tool that renders markdown files in a native frameless macOS window. Desig
 - CommonMark + GFM rendering with syntax highlighting (Chroma)
 - KaTeX math and Mermaid diagram support (lazy-loaded)
 - Live reload on file changes (fsnotify + polling fallback)
-- Multi-window support — each file opens in its own window
+- Multi-window support — each file opens in its own window (re-opening brings existing window to front)
 - Table of contents sidebar
 - Dark/light/system theme with CSS custom properties
 - Vim-inspired keyboard shortcuts

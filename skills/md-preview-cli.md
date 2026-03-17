@@ -52,3 +52,10 @@ md-preview-cli --browser README.md  # open in system browser
 - In-content search with match navigation
 - Live reload on file changes
 - Dark/light/system theme with persistence
+
+## Behavior
+
+- Prints `Previewing <filename>` to stdout on success
+- Re-opening the same file brings existing window to front (prints `Previewing <filename> (reused)`)
+- Stdin always creates a new window (no dedup)
+- Exit code 0 on success, non-zero on error (errors go to stderr)
